@@ -151,9 +151,12 @@ MCP-серверы умеют работать **по расписанию** —
 серверу) либо явным вызовом `run_due()` — так «24/7» эмулируется
 персистентностью состояния. Общий механизм заданий — `rtk_app/jobs_store.py`.
 
-- **Календарь — напоминалка до события:**
-  - `schedule_reminder(uid|summary, date, lead_minutes)` — напомнить за
-    `lead_minutes` минут до начала события (по UID ИЛИ по названию/дате);
+- **Календарь — напоминалка до события (с повтором):**
+  - `schedule_reminder(uid|summary, date, lead_minutes, repeat_minutes|repeat_hours)`
+    — напомнить за `lead_minutes` минут до начала события (по UID ИЛИ по
+    названию/дате) и **повторять каждые** `repeat_minutes`/`repeat_hours`
+    (например, `repeat_hours=1` — раз в час; `repeat_minutes=1` — раз в
+    минуту; `0` — один раз). Повторы идут, **пока не наступит событие**;
   - `list_reminders()`, `cancel_reminder(id)` — список и отмена;
   - `due_reminders()` / `run_due()` — наступившие напоминания (что озвучить).
 - **Конвертер — сбор курсов по расписанию + агрегат:**
@@ -247,6 +250,7 @@ python tests/check_server_context.py   # контекст на стороне с
 python tests/check_strategies.py       # стратегии (sliding/facts/branch)
 python tests/check_auto_compact.py     # авто-сжатие через HTTP
 python tests/check_jobs.py             # задания расписания MCP (JSON, агрегат)
+python tests/check_reminders.py        # повторяющиеся напоминания календаря
 ```
 
 Каждый тест печатает `[OK]`/`[FAIL]` по проверкам и строку

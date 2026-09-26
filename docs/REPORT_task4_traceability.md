@@ -16,6 +16,7 @@
 | 2 | Инструмент выполняется по расписанию | `JobsStore.add_job`, `due_jobs`, `mark_run`, `_advance`; `run_due()` в серверах | `tests/check_jobs.py` §2, §3 |
 | 3 | Инструмент возвращает агрегированный результат | `currency_server.rate_summary()`; `calendar_server.due_reminders()` | `tests/check_jobs.py` §5; live-прогон |
 | 4 | Календарь: напоминалка до события | `yandex_calendar_server.schedule_reminder/due_reminders/run_due` | live-прогон (create+schedule+due) |
+| 4a | Календарь: повтор напоминаний (раз в N мин/ч) | `schedule_reminder(repeat_minutes/repeat_hours)`, `_next_reminder_time` | `tests/check_reminders.py` |
 | 5 | Конвертер: работа по расписанию, сбор в JSON, агрегат | `currency_server.schedule_rate/collect_now/rate_points/rate_summary` | `tests/check_jobs.py`; live-прогон |
 
 ---
@@ -91,15 +92,25 @@ live-прогон `rate_summary` (см. ниже).
 
 **Реализация** — `yandex_calendar_server.py`:
 
-- `schedule_reminder(uid|summary, date, lead_minutes)` — момент напоминания =
-  начало события − `lead_minutes`; создаётся разовое задание `kind="reminder"`;
+- `schedule_reminder(uid|summary, date, lead_minutes, repeat_minutes, repeat_hours)`
+  — момент напоминания = начало события − `lead_minutes`; создаётся задание
+  `kind="reminder"` с параметрами `lead_minutes`/`repeat_minutes`;
 - `list_reminders()`, `cancel_reminder(id)` — список/отмена;
 - `due_reminders()` / `run_due()` — наступившие напоминания;
 - ленивый прогон в `list_events`.
 
-**Тест** — живой прогон: создание события → `schedule_reminder` →
-`due_reminders` вернул текст напоминания → (после выдачи) `run_due` пуст
-(задание помечено `done`); `cancel_reminder` очищает список.
+**Повтор напоминаний (п. 4a).** Параметр `repeat_minutes` (или удобный
+`repeat_hours`, например `repeat_hours=1` — «раз в час») задаёт периодичность:
+первое напоминание — за `lead_minutes` до начала, далее — каждые
+`repeat_minutes`, **пока не наступит событие**. Вычисление следующего момента и
+остановка — в `_next_reminder_time()`; завершение повторяющегося задания —
+через `JobsStore.mark_fired(job_id, next_run="")`. Поддержка «раз в минуту»
+(`repeat_minutes=1`) и «раз в час» (`repeat_hours=1`).
+
+**Тест** — живой прогон: создание события → `schedule_reminder(repeat_hours=1)`
+→ `due_reminders` выдал напоминание и **переназначил** следующий запуск (не
+`done`) → `cancel_reminder` очищает. Офлайн — `tests/check_reminders.py`
+(разовое/повтор/остановка у начала события/формат периода).
 
 ---
 
@@ -129,10 +140,11 @@ live-прогон `rate_summary` (см. ниже).
 
 ## Как запускать проверки
 
-Автономный (офлайн, без сети) тест механизма заданий:
+Автономные (офлайн, без сети) тесты механизма:
 
 ```bash
-python tests/check_jobs.py
+python tests/check_jobs.py        # задания расписания (JSON, агрегат)
+python tests/check_reminders.py   # повторяющиеся напоминания календаря
 ```
 
 Живые прогоны MCP-серверов (нужны `mcp`, сеть и ключи `exch.txt`/`ya.txt`):
@@ -153,7 +165,8 @@ python client.py                      # список инструментов к
 | `docs/task4.md` | Исходное ТЗ |
 | `rtk_app/jobs_store.py` | Задания расписания + накопленные данные (JSON) |
 | `currency_server.py` | MCP-сервер «Конвертер»: сбор курсов + агрегат |
-| `yandex_calendar_server.py` | MCP-сервер Календаря: напоминания до события |
+| `yandex_calendar_server.py` | MCP-сервер Календаря: напоминания до события (с повтором) |
 | `rtk_app/config.py` | `MCP_SERVERS` (список серверов для выбора в UI) |
 | `session/mcp_jobs.json` | Файл заданий/точек (создаётся в рантайме) |
 | `tests/check_jobs.py` | Автономный тест механизма заданий |
+| `tests/check_reminders.py` | Автономный тест повторяющихся напоминаний |

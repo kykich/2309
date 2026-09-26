@@ -10,8 +10,9 @@
   * delete_event   — удалить событие (по UID ИЛИ по названию/дате).
 
 ДОПОЛНИТЕЛЬНО (см. docs/task4.md) — РАБОТА ПО РАСПИСАНИЮ как НАПОМИНАЛКА
-до события (напомнить за N минут/часов/дней до начала события):
-  * schedule_reminder  — поставить напоминание к событию (по UID ИЛИ словами);
+до события (напомнить за N минут/часов/дней до начала события, с повтором):
+  * schedule_reminder  — напоминание к событию (по UID ИЛИ словами; можно
+                          задать периодичность повторения — раз в N минут/часов);
   * list_reminders      — список напоминаний;
   * cancel_reminder     — отменить напоминание по id;
   * due_reminders        — наступившие напоминания (что озвучить сейчас);
@@ -29,6 +30,7 @@
 import datetime as _dt
 import os
 import sys
+import time
 
 from mcp.server.mcpserver import MCPServer
 
@@ -38,7 +40,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Хранилище заданий расписания — общий модуль проекта (rtk_app/jobs_store.py).
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
-from rtk_app.jobs_store import JobsStore, now_str
+from rtk_app.jobs_store import (JobsStore, now_str, parse_time, TIME_FMT)
 
 mcp = MCPServer("yandex-calendar")
 
@@ -453,9 +455,13 @@ def _event_start_dt(cal, uid="", summary="", date=""):
 def _run_due_reminders():
     """Собирает НАСТУПИВШИЕ напоминания. Возвращает список текстов-напоминаний.
 
-    Лениво вызывается из других инструментов и явно из run_due(). Для
-    разового напоминания после срабатывания помечаем задание done; ошибки
-    (событие удалено и т.п.) также помечаем исполненными, чтобы не залипали.
+    Лениво вызывается из других инструментов и явно из run_due().
+
+    Разовое напоминание после срабатывания помечается done. ДЛЯ ПОВТОРЯЮЩЕГОСЯ
+    (repeat_minutes > 0) напоминание срабатывает СНОВА через repeat_minutes —
+    но только ПОКА НЕ НАСТУПИЛО событие: как только следующий момент повтора
+    достигнет/перешагнёт время начала события, задание завершается (done),
+    чтобы не напоминать о прошедшем событии.
     """
     messages = []
     for job in _reminders().due_jobs():
@@ -463,23 +469,75 @@ def _run_due_reminders():
             continue
         params = job.get("params") or {}
         title = params.get("event_summary") or params.get("summary") or "событие"
-        when = params.get("event_start") or ""
+        when = _trim_seconds(params.get("event_start"))
         lead = int(params.get("lead_minutes", 0) or 0)
+        repeat = int(params.get("repeat_minutes", 0) or 0)
         lead_txt = _human_lead(lead)
-        messages.append("НАПОМИНАНИЕ: «%s» начнётся %s (%s)."
-                        % (title, when, lead_txt))
-        _reminders().mark_run(job["id"], "напомнил: %s" % title)
+        if repeat > 0:
+            messages.append("НАПОМИНАНИЕ: «%s» начнётся %s (%s; повтор каждые %s)."
+                            % (title, when, lead_txt, _human_dur(repeat)))
+        else:
+            messages.append("НАПОМИНАНИЕ: «%s» начнётся %s (%s)."
+                            % (title, when, lead_txt))
+        # Вычисляем следующий момент повтора с оглядкой на начало события.
+        next_run = _next_reminder_time(params, repeat)
+        _reminders().mark_fired(job["id"], next_run, "напомнил: %s" % title)
     return messages
 
 
-def _human_lead(minutes):
-    """Человекочитаемая длительность опережения: 90 -> 'через 1 ч 30 мин'."""
+def _next_reminder_time(params, repeat_minutes):
+    """Следующий момент повторного напоминания (строка TIME_FMT) или "".
+
+    Правило: после каждого срабатывания следующий момент = предыдущий +
+    repeat_minutes. Если repeat_minutes <= 0 — возвращаем "" (разовое, done).
+    Если следующий момент оказывается НЕ РАНЬШЕ начала события — тоже ""
+    (напоминания прекращаются с наступлением события).
+    """
+    if int(repeat_minutes or 0) <= 0:
+        return ""
+    start = _parse_event_start(params.get("event_start"))
+    if not start:
+        return ""
+    # Предыдущий момент — время «сейчас» (задание только что сработало).
+    nxt = time.localtime(time.time() + int(repeat_minutes) * 60)
+    if nxt >= start:
+        return ""   # событие уже началось (или начнётся до след. повтора)
+    return time.strftime(TIME_FMT, nxt)
+
+
+def _parse_event_start(value):
+    """Разбирает время начала события из params в struct_time (терпимо к формату).
+
+    В параметрах event_start может храниться без секунд ("YYYY-MM-DD HH:MM") —
+    поэтому пробуем несколько форматов, а не только TIME_FMT.
+    """
+    if not value:
+        return None
+    s = str(value).strip().replace("T", " ")
+    for fmt in (TIME_FMT, "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return time.strptime(s, fmt)
+        except ValueError:
+            continue
+    return parse_time(value)
+
+
+def _trim_seconds(value):
+    """Убирает секунды из строки времени для показа: '…15:44:00' -> '…15:44'."""
+    s = str(value or "").strip()
+    if len(s) == 19 and s[16] == ":":   # "YYYY-MM-DD HH:MM:SS"
+        return s[:16]
+    return s
+
+
+def _human_dur(minutes):
+    """Человекочитаемая длительность периода: 60 -> '1 ч', 90 -> '1 ч 30 мин'."""
     try:
         m = int(minutes)
     except (TypeError, ValueError):
         return ""
     if m <= 0:
-        return "до начала"
+        return "0 мин"
     days, rem = divmod(m, 1440)
     hours, mins = divmod(rem, 60)
     parts = []
@@ -489,7 +547,18 @@ def _human_lead(minutes):
         parts.append("%d ч" % hours)
     if mins:
         parts.append("%d мин" % mins)
-    return "за " + " ".join(parts) + " до начала"
+    return " ".join(parts)
+
+
+def _human_lead(minutes):
+    """Человекочитаемая длительность опережения: 90 -> 'за 1 ч 30 мин до начала'."""
+    try:
+        m = int(minutes)
+    except (TypeError, ValueError):
+        return ""
+    if m <= 0:
+        return "до начала"
+    return "за " + _human_dur(m) + " до начала"
 
 
 def _fmt_reminders(jobs):
@@ -499,11 +568,18 @@ def _fmt_reminders(jobs):
     lines = []
     for j in jobs:
         p = j.get("params") or {}
-        status = "выполнено" if j.get("done") else \
-            ("сработает: %s" % j.get("next_run", ""))
-        lines.append("  %s — «%s» %s, %s"
+        repeat = int(p.get("repeat_minutes", 0) or 0)
+        rep_txt = ("; повтор каждые %s" % _human_dur(repeat)) if repeat > 0 else ""
+        if j.get("done"):
+            status = "выполнено"
+        else:
+            status = ("сработает: %s" % j.get("next_run", ""))
+            if int(j.get("runs", 0) or 0) > 0:
+                status = ("сработает: %s (уже раз: %d)"
+                          % (j.get("next_run", ""), int(j.get("runs", 0) or 0)))
+        lines.append("  %s — «%s» %s%s, %s"
                      % (j.get("id"), p.get("event_summary", "?"),
-                        _human_lead(p.get("lead_minutes", 0)), status))
+                        _human_lead(p.get("lead_minutes", 0)), rep_txt, status))
     return "\n".join(lines)
 
 
@@ -739,19 +815,25 @@ def delete_event(uid: str = "", summary: str = "", date: str = "",
 # --------------------------------------------------------------------------
 @mcp.tool()
 def schedule_reminder(uid: str = "", summary: str = "", date: str = "",
-                      lead_minutes: int = 30) -> str:
-    """Поставить НАПОМИНАНИЕ к событию — напомнить за N минут до начала.
+                      lead_minutes: int = 30, repeat_minutes: int = 0,
+                      repeat_hours: float = 0) -> str:
+    """Поставить НАПОМИНАНИЕ к событию — напомнить за N до начала, с повтором.
 
     Событие ищется ЛИБО по uid, ЛИБО «словами»:
       * summary — часть названия (например, «встреча»);
       * date    — дата события ("YYYY-MM-DD") — если нужно уточнить.
-    lead_minutes — за сколько МИНУТ до начала напомнить (например, 30, 120,
-                   1440 — за сутки).
+    lead_minutes  — за сколько МИНУТ до начала НАЧАТЬ напоминать
+                    (например, 30, 120, 1440 — за сутки).
+    repeat_minutes — КАК ЧАСТО повторять напоминание, в минутах
+                    (например, 1 — раз в минуту; 60 — раз в час; 0 — один раз).
+    repeat_hours  — то же в часах (удобно для «раз в час»: repeat_hours=1);
+                    если задано, перекрывает repeat_minutes.
 
-    Момент напоминания = начало события − lead_minutes. Когда он наступает,
-    напоминание попадает в due_reminders()/run_due() (и в ленивый прогон при
-    обращении к календарю) — агент озвучивает его. Если момент уже прошёл,
-    напоминание считается наступившим сразу.
+    Первое напоминание — за lead_minutes до начала; далее — каждые
+    repeat_minutes, ПОКА НЕ НАСТУПИТ событие (затем напоминания прекращаются).
+    Наступившие напоминания попадают в due_reminders()/run_due() (и в ленивый
+    прогон при обращении к календарю). Пример: напомнить за 1 ч и повторять
+    каждые 10 минут: lead_minutes=60, repeat_minutes=10.
     """
     try:
         with _client() as client:
@@ -764,18 +846,27 @@ def schedule_reminder(uid: str = "", summary: str = "", date: str = "",
         lead = max(0, int(lead_minutes or 0))
     except (TypeError, ValueError):
         lead = 30
-    # Момент напоминания = начало события − lead. Приводим к строке TIME_FMT.
+    # Частота повтора: часы (если заданы) важнее минут.
+    try:
+        if repeat_hours and float(repeat_hours) > 0:
+            repeat = int(round(float(repeat_hours) * 60))
+        else:
+            repeat = max(0, int(repeat_minutes or 0))
+    except (TypeError, ValueError):
+        repeat = 0
+    # Момент первого напоминания = начало события − lead (в прошлом → сразу).
     remind_at = start_dt - _dt.timedelta(minutes=lead)
-    # напоминание разовое: at=момент напоминания (в прошлом → сработает сразу).
     job = _reminders().add_job(
         "reminder",
-        {"event_summary": title, "event_start": start_dt.strftime("%Y-%m-%d %H:%M"),
-         "lead_minutes": lead, "uid": uid or ""},
+        {"event_summary": title,
+         "event_start": start_dt.strftime(TIME_FMT),
+         "lead_minutes": lead, "repeat_minutes": repeat, "uid": uid or ""},
         every_minutes=0,
-        at=remind_at.strftime("%Y-%m-%d %H:%M:%S"),
+        at=remind_at.strftime(TIME_FMT),
     )
-    return ("Напоминание %s создано: «%s» %s (событие: %s)."
-            % (job["id"], title, _human_lead(lead),
+    rep_txt = (", повтор каждые %s" % _human_dur(repeat)) if repeat > 0 else ""
+    return ("Напоминание %s создано: «%s» %s%s (событие: %s)."
+            % (job["id"], title, _human_lead(lead), rep_txt,
                start_dt.strftime("%Y-%m-%d %H:%M")))
 
 
@@ -798,8 +889,9 @@ def due_reminders() -> str:
     """НАСТУПИВШИЕ напоминания — что нужно озвучить сейчас.
 
     Возвращает список напоминаний, срок которых уже наступил (и которые ещё
-    не выданы). Вызовите это, когда хотите показать пользователю актуальные
-    напоминания; после выдачи разовое напоминание помечается исполненным.
+    не выданы). Для ПОВТОРЯЮЩИХСЯ напоминаний (repeat_minutes > 0) после
+    выдачи назначается следующее срабатывание (пока не наступит событие);
+    разовое напоминание помечается исполненным.
     """
     msgs = _run_due_reminders()
     if not msgs:
@@ -813,6 +905,7 @@ def run_due() -> str:
 
     То же, что due_reminders(), но под «тик»: удобно периодически вызывать,
     чтобы забирать сработавшие напоминания (заменяет отсутствующий демон).
+    Повторяющиеся напоминания остаются активными до начала события.
     """
     msgs = _run_due_reminders()
     if not msgs:

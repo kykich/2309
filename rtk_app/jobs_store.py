@@ -39,6 +39,10 @@ run_due(). Так «24/7» эмулируется персистентность
   "last_result": "…"           # текст последнего результата (для сводки)
 }
 
+Методы для исполнителей: `due_jobs()` (что созрело), `mark_run()` (простой
+сдвиг/завершение) и `mark_fired(job_id, next_run)` (явный следующий момент;
+пустой next_run → задание завершается).
+
 Время хранится строками, локальное, в формате "%Y-%m-%d %H:%M:%S", что
 удобно и для сравнения (лексикографически), и для чтения.
 """
@@ -262,6 +266,34 @@ class JobsStore:
                 every = int(j.get("every_minutes", 0) or 0)
                 if every > 0:
                     j["next_run"] = self._advance(j.get("next_run"), every)
+                else:
+                    j["done"] = True
+                break
+            self._save(data)
+
+    def mark_fired(self, job_id, next_run, result=""):
+        """Отмечает запуск задания с ЯВНО заданным следующим моментом.
+
+        Используется исполнителем, когда правило повтора/остановки сложнее,
+        чем «сдвинуть на every_minutes» (например, напоминания до события:
+        повторяются, пока не наступит событие, затем завершаются).
+
+        next_run — строка TIME_FMT следующего запуска; ПУСТАЯ строка/None
+        означает «больше не запускать» — задание помечается done.
+        done     — производное: True, если next_run пуст.
+        """
+        with self._lock:
+            data = self._load()
+            space = self._space(data)
+            for j in space["jobs"]:
+                if j.get("id") != job_id:
+                    continue
+                j["last_run"] = now_str()
+                j["runs"] = int(j.get("runs", 0)) + 1
+                j["last_result"] = str(result or "")
+                if next_run:
+                    j["next_run"] = str(next_run)
+                    j["done"] = False
                 else:
                     j["done"] = True
                 break
