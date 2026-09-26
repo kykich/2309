@@ -37,16 +37,10 @@ JSON-API:
                                "finish"|"reset"|"state", …} -> этап/шаг/
                               ожидаемое действие (planning->execution->
                               validation->done), пауза/продолжение.
-    POST /api/task/selftest - запустить автономный тест автомата задачи
-                              (check_task_state.py) и вернуть структурированный
-                              результат по шагам — для показа этапов на странице.
     GET  /api/invariants    - инварианты (правила-ограничения) + категории
     POST /api/invariants    - {action:"add"|"update"|"delete"|"replace"|
                                "clear"|"state", …} -> инварианты (отдельно от
                               диалога; жёсткие правила, нарушать нельзя)
-    POST /api/invariants/selftest - автотест инвариантов силами модели
-                              (провокации нарушений + детерминированная
-                              пост-проверка отказа), для кнопки «Автотест»
     GET  /api/profiles      - список профилей (персон) + активный
     POST /api/profiles      - {action:"create"|"switch"|"update"|"delete", …}
                               -> профили (персоны): при создании задаются
@@ -94,7 +88,7 @@ class _ServerState:
     mcp_enabled = getattr(config, "MCP_ENABLED", False)
     mcp_model = getattr(config, "MCP_MODEL", "")
     # id выбранного MCP-сервера (см. config.MCP_SERVERS).
-    mcp_server = getattr(config, "MCP_SERVER_DEFAULT", "demo")
+    mcp_server = getattr(config, "MCP_SERVER_DEFAULT", "calendar")
     mcp_status = None
     mcp_lock = threading.Lock()
 
@@ -297,12 +291,8 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             return self._handle_branches()
         if urllib.parse.urlparse(self.path).path == "/api/task":
             return self._handle_task()
-        if urllib.parse.urlparse(self.path).path == "/api/task/selftest":
-            return self._handle_task_selftest()
         if urllib.parse.urlparse(self.path).path == "/api/invariants":
             return self._handle_invariants()
-        if urllib.parse.urlparse(self.path).path == "/api/invariants/selftest":
-            return self._handle_invariants_selftest()
         if urllib.parse.urlparse(self.path).path == "/api/profiles":
             return self._handle_profiles()
         if urllib.parse.urlparse(self.path).path == "/api/mcp":
@@ -848,164 +838,6 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             return self._send_json(500, {
                 "ok": False, "error": "Ошибка состояния задачи: %s" % exc})
 
-    def _handle_task_selftest(self):
-        """Прогон автомата задачи для показа этапов НА СТРАНИЦЕ.
-
-        Поддерживает два режима (по полю mode в теле запроса):
-          * "logic" (по умолчанию) — запускает автономный тест
-            check_task_state.py отдельным процессом и парсит вывод в шаги
-            (секции + проверки OK/FAIL). Быстро, без сети/LLM;
-          * "llm" — проводит задачу по этапам СИЛАМИ ВЫБРАННОЙ МОДЕЛИ:
-            {goal, model} → агент.walk_task_llm(); возвращает прохождение
-            по шагам (реплика → ответ модели → предложенный переход →
-            принят/отклонён по правилам автомата).
-
-        Общий ответ: {ok, mode, …}. Для mode=llm добавляются goal, model,
-        steps, final.
-        """
-        data = self._read_json_body() or {}
-        mode = str(data.get("mode", "logic")).strip().lower()
-
-        if mode == "llm":
-            return self._handle_task_selftest_llm(data)
-
-        if mode == "spec":
-            return self._handle_task_selftest_spec(data)
-
-        # ---- mode "logic": автономный тест автомата (check_task_state.py) ----
-        import subprocess
-        import sys as _sys
-        root = config.BASE_DIR
-        script = os.path.join(root, "tests", "check_task_state.py")
-        if not os.path.isfile(script):
-            return self._send_json(500, {
-                "ok": False, "error": "Файл теста не найден: %s" % script})
-        try:
-            # ВАЖНО: дочерний процесс печатает в консольной кодировке ОС
-            # (на Windows это cp1251), а не в UTF-8. Принудительно задаём
-            # UTF-8 для stdout/stderr теста, иначе русский текст приходит
-            # «кракозябрами» (UTF-8 декодируется из cp1251-байтов).
-            env = dict(os.environ)
-            env["PYTHONIOENCODING"] = "utf-8"
-            env["PYTHONUTF8"] = "1"
-            proc = subprocess.run(
-                [_sys.executable, script],
-                cwd=root, capture_output=True, timeout=60, env=env)
-            out = (proc.stdout or b"").decode("utf-8", "replace")
-            err = (proc.stderr or b"").decode("utf-8", "replace")
-            rc = proc.returncode
-        except subprocess.TimeoutExpired:
-            return self._send_json(504, {
-                "ok": False, "error": "Тест не завершился за 60 секунд."})
-        except Exception as exc:
-            return self._send_json(500, {
-                "ok": False, "error": "Не удалось запустить тест: %s" % exc})
-
-        sections = []
-        cur = None
-        passed = failed = 0
-        total = 0
-        for line in out.splitlines():
-            s = line.rstrip()
-            stripped = s.strip()
-            if stripped.startswith("==") and stripped.endswith("=="):
-                name = stripped.strip("= ").strip()
-                cur = {"name": name, "steps": []}
-                sections.append(cur)
-                continue
-            if stripped.startswith("[OK]") or stripped.startswith("[FAIL]"):
-                status = "ok" if stripped.startswith("[OK]") else "fail"
-                body = stripped[4:].strip()
-                # Отделяем краткое пояснение после «—» (если есть).
-                detail = ""
-                for sep in ("\u2014", " - "):
-                    if sep in body:
-                        body, detail = body.split(sep, 1)
-                        body, detail = body.strip(), detail.strip()
-                        break
-                if status == "ok":
-                    passed += 1
-                else:
-                    failed += 1
-                total += 1
-                if cur is None:
-                    cur = {"name": "Тест", "steps": []}
-                    sections.append(cur)
-                cur["steps"].append({"status": status,
-                                     "title": body, "detail": detail})
-            elif stripped.startswith("Итог:"):
-                cur = None  # подпись итога собираем отдельно (см. ниже)
-
-        ok = (failed == 0 and total > 0 and rc == 0)
-        return self._send_json(200, {
-            "ok": ok,
-            "mode": "logic",
-            "total": total,
-            "passed": passed,
-            "failed": failed,
-            "returncode": rc,
-            "sections": sections,
-            "error": (None if ok else ("stderr: %s" % err.strip() if err.strip()
-                                       else "Есть проваленные проверки.")),
-        })
-
-    def _handle_task_selftest_llm(self, data):
-        """Прогон задачи по этапам силами ВЫБРАННОЙ МОДЕЛИ (mode=llm).
-
-        Ожидает: {goal (цель задачи), model (метка модели)}. Делегирует
-        прогон агенту (agent.walk_task_llm), который на каждом шаге
-        спрашивает модель об ответе и переходе автомата, а сервер применяет
-        переход только при его корректности. Возвращает пошаговый результат
-        для наглядного показа на странице.
-        """
-        goal = str(data.get("goal") or "").strip()
-        if not goal:
-            goal = "Разработка приложения на Qt + C++"
-        model = data.get("model")
-        if self.agent is None:
-            return self._send_json(503, {
-                "ok": False, "mode": "llm",
-                "error": "Агент недоступен (нет моделей/ключа).",
-                "goal": goal, "model": model, "steps": []})
-        try:
-            result = self.agent.walk_task_llm(
-                goal, model=model, pause_at=data.get("pause_at", 35))
-        except Exception as exc:
-            return self._send_json(500, {
-                "ok": False, "mode": "llm",
-                "error": "Прогон не удался: %s" % exc,
-                "goal": goal, "model": model, "steps": []})
-        result["mode"] = "llm"
-        return self._send_json(200, result)
-
-    def _handle_task_selftest_spec(self, data):
-        """Автотест требований ТЗ (task.md) СИЛАМИ ВЫБРАННОЙ МОДЕЛИ (mode=spec).
-
-        Ожидает: {goal (цель задачи), model (метка модели)}. Делегирует
-        прогон агенту (agent.verify_task_spec), который проверяет каждое
-        требование ТЗ на реальном автомате TaskState, ОТДЕЛЬНО проверяя
-        ЗАПРЕТЫ попыткой нарушения (недопустимый переход должен быть
-        отклонён). Возвращает пошаговый результат для показа на странице.
-        """
-        goal = str(data.get("goal") or "").strip()
-        if not goal:
-            goal = "Разработка приложения на Qt + C++"
-        model = data.get("model")
-        if self.agent is None:
-            return self._send_json(503, {
-                "ok": False, "mode": "spec",
-                "error": "Агент недоступен (нет моделей/ключа).",
-                "goal": goal, "model": model, "steps": []})
-        try:
-            result = self.agent.verify_task_spec(goal, model=model)
-        except Exception as exc:
-            return self._send_json(500, {
-                "ok": False, "mode": "spec",
-                "error": "Тест ТЗ не удался: %s" % exc,
-                "goal": goal, "model": model, "steps": []})
-        result["mode"] = "spec"
-        return self._send_json(200, result)
-
     def _handle_profiles(self):
         """Управление ПРОФИЛЯМИ (персонами).
 
@@ -1106,38 +938,6 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             return self._send_json(500, {
                 "ok": False, "error": "Ошибка инвариантов: %s" % exc})
         return self._send_json(200, state)
-
-    def _handle_invariants_selftest(self):
-        """АВТОТЕСТ инвариантов (кнопка «Автотест») СИЛАМИ МОДЕЛИ.
-
-        Если инварианты не переданы — используются ДЕФОЛТНЫЕ (зашитые в
-        config): тестовое задание и набор правил про приложение Qt + C++ для
-        контроля расходов. Агент (agent.verify_invariants) выполняет
-        провокации нарушений и детерминированную пост-проверку отказа.
-
-        Ожидает (необязательно): {goal, model, invariants:[{text,category}]}.
-        """
-        data = self._read_json_body() or {}
-        goal = str(data.get("goal") or "").strip()
-        if not goal:
-            goal = config.INVARIANT_DEFAULT_TEST_GOAL
-        invariants = data.get("invariants")
-        if not isinstance(invariants, list) or not invariants:
-            invariants = [dict(i) for i in config.INVARIANT_DEFAULT_TEST_SET]
-        model = data.get("model")
-        if self.agent is None:
-            return self._send_json(503, {
-                "ok": False, "error": "Агент недоступен (нет моделей/ключа).",
-                "goal": goal, "model": model, "steps": []})
-        try:
-            result = self.agent.verify_invariants(
-                goal, invariants, model=model)
-        except Exception as exc:
-            return self._send_json(500, {
-                "ok": False, "error": "Автотест инвариантов не удался: %s" % exc,
-                "goal": goal, "model": model, "steps": []})
-        result["invariants"] = invariants
-        return self._send_json(200, result)
 
     def _handle_mcp(self):
         """Управление MCP: чтение/запись настроек и проверка статуса сервера.

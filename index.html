@@ -67,26 +67,6 @@
             </div>
             <span class="side-note">этап → шаг → ожидаемое действие; пауза возможна на любом этапе</span>
 
-            <!-- ПРОГОН АВТОНОМНОГО ТЕСТА автомата задачи. Результат
-                 показывается в ОКНЕ ОТВЕТОВ (справа), наглядно по этапам.
-                 Два режима: «логика» (автономный check_task_state.py, без
-                 сети) и «по модели» (выбранная модель ведёт задачу по
-                 этапам — ответы модели + принятые/отклонённые переходы). -->
-            <div class="task-selftest-buttons">
-                <button id="task-selftest" type="button" class="btn-side link"
-                        title="Автономный тест автомата задачи (быстро, без сети)">
-                    ▶ Тест автомата
-                </button>
-                <button id="task-selftest-llm" type="button" class="btn-side link"
-                        title="Прогон задачи по этапам выбранной моделью — ответы модели и переходы">
-                    ▶ Прогон по модели
-                </button>
-                <button id="task-selftest-spec" type="button" class="btn-side link"
-                        title="Автотест требований ТЗ выбранной моделью: проверка переходов + вариант НАРУШЕНИЯ (недопустимый переход должен быть отклонён)">
-                    ▶ Тест ТЗ
-                </button>
-            </div>
-
             <!-- Профили (персоны): именованные наборы состояния — своя память,
                  свой диалог и своя манера общения. У профиля задаются ХАРАКТЕР
                  (тон) и ХАРАКТЕР ОТВЕТОВ (формат/длина) — они подставляются в
@@ -133,12 +113,6 @@
                     <button id="invariant-add" type="button" class="btn-side primary">Добавить</button>
                     <button id="invariant-clear" type="button" class="btn-side link">Очистить</button>
                 </div>
-            </div>
-            <div class="invariants-selftest-buttons">
-                <button id="invariant-selftest" type="button" class="btn-side link"
-                        title="Автотест инвариантов силами модели: провокации нарушений + проверка отказа (тестовое задание про Qt + C++)">
-                    ▶ Автотест инвариантов
-                </button>
             </div>
             <span class="side-note">правила хранятся отдельно от диалога; при конфликте ассистент отказывает и объясняет причину</span>
 

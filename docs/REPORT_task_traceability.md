@@ -1,5 +1,12 @@
 # Трассировка требований: `task.md` → реализация → тест
 
+> ℹ️ **Примечание.** Автономный тест автомата задачи (`tests/check_task_state.py`)
+> и относящиеся к нему интерфейсные прогоны («Тест автомата», «Прогон по модели»,
+> «Тест ТЗ») из проекта удалены. Реализация самого автомата задачи
+> (`rtk_app/task_state.py`, `session_store.py`, `agent.py`) сохранена и
+> доступна через панель «Состояние задачи» в интерфейсе. Упоминания теста в
+> разделах ниже оставлены как историческая справка о проектировании.
+
 **Тема задачи:** Контролируемые переходы состояний — явные переходы между
 состояниями задачи, при которых ассистент не может «перепрыгнуть» этап.
 
@@ -13,15 +20,15 @@
 
 | Пункт `task.md` | Требование | Реализация (код) | Тест (проверка) |
 |---|---|---|---|
-| 1 | У задачи есть допустимые состояния | `rtk_app/task_state.py`: `STAGES`, `STAGE_LABELS` | `check_task_state.py::test_clean_machine`, `test_transition_table` |
-| 2 | Есть разрешённые переходы между ними | `rtk_app/task_state.py`: `ALLOWED_TRANSITIONS`, `TaskState.can_transition()`, `is_valid_transition()` | `check_task_state.py::test_transition_table`, `test_clean_machine` |
-| 3 | Ассистент не может «перепрыгнуть» этап | `TaskState.advance()` (отклонение недопустимого перехода) | `check_task_state.py::test_clean_machine` |
+| 1 | У задачи есть допустимые состояния | `rtk_app/task_state.py`: `STAGES`, `STAGE_LABELS` | панель «Состояние задачи» (UI) |
+| 2 | Есть разрешённые переходы между ними | `rtk_app/task_state.py`: `ALLOWED_TRANSITIONS`, `TaskState.can_transition()`, `is_valid_transition()` | панель «Состояние задачи» (UI) |
+| 3 | Ассистент не может «перепрыгнуть» этап | `TaskState.advance()` (отклонение недопустимого перехода) | панель «Состояние задачи» (UI) |
 | 4.1 | Нельзя делать реализацию до утверждённого плана | `ALLOWED_TRANSITIONS["planning"] = {"planning", "execution"}` | `test_clean_machine`: «запрет прыжка planning->done», «planning не прыгает в validation» |
 | 4.2 | Нельзя делать финал без валидации | `TaskState.finish()` — только из `validation` | `test_clean_machine`, `test_store_persistence`: «finish не из validation запрещён» |
 | 5.1 | Попытки перейти в недопустимое состояние | `advance()` возвращает `(False, …)`, пишет запись `reject` в журнал | `test_clean_machine`, `test_transition_table` |
 | 5.2 | Реакция ассистента | `system_prompt_block()` (этап/шаг → промпт); авто-переход только при корректности (`web/server.py::_maybe_advance_task`) | `test_prompt_block`, `check_task_state.py` (весь прогон) |
 | 5.3 | Корректность продолжения после паузы | `TaskState.pause()` / `resume()` — сохраняют этап/шаг/цель | `test_pause_resume_keeps_position`, `test_store_persistence` |
-| 6 | Ассистент с контролируемым жизненным циклом задачи | `TaskState` + `task_message()` + интеграция в `agent.py` и `session_store.py` | `check_task_state.py` (5 разделов), серверный прогон `web/server.py::_handle_task_selftest` |
+| 6 | Ассистент с контролируемым жизненным циклом задачи | `TaskState` + `task_message()` + интеграция в `agent.py` и `session_store.py` | панель «Состояние задачи» (UI) |
 
 ---
 
@@ -229,9 +236,9 @@ def finish(self, note=""):
 |---|---|---|
 | Логика автомата | `rtk_app/task_state.py` | `TaskState`: этапы, переходы, пауза/продолжение, журнал, промпт-блок |
 | Хранилище | `rtk_app/session_store.py` | `start_task/advance_task/pause_task/resume_task/finish_task/reset_task`, снимок в JSON (в т.ч. у каждого профиля) |
-| Агент | `rtk_app/agent.py` | `task_system_prompt()`, `advance_task()` (LLM предлагает переход), `walk_task_llm()` (прогон) |
-| Сервер | `web/server.py` | `POST /api/task` (start/advance/pause/resume/finish/reset/state), авто-переход `_maybe_advance_task`, тест `POST /api/task/selftest` |
-| Интерфейс | `index.html`, `js/app.js` | панель «Состояние задачи»: этапы, кнопки, пауза/продолжение, прогон теста |
+| Агент | `rtk_app/agent.py` | `task_system_prompt()`, `advance_task()` (LLM предлагает переход) |
+| Сервер | `web/server.py` | `POST /api/task` (start/advance/pause/resume/finish/reset/state), авто-переход `_maybe_advance_task` |
+| Интерфейс | `index.html`, `js/app.js` | панель «Состояние задачи»: этапы, кнопки, пауза/продолжение |
 
 **Тест** — `check_task_state.py` целиком (5 разделов):
 
@@ -245,15 +252,10 @@ def finish(self, note=""):
 
 ## Как запускать проверки
 
-Автономный тест логики автомата (без сети):
-
-```bash
-python check_task_state.py
-```
-
-Ожидаемый вывод — «Итог: N OK, 0 FAIL». Тест также доступен из интерфейса:
-кнопки **«▶ Тест автомата»** (режим `logic`) и **«▶ Прогон по модели»**
-(режим `llm`) на панели «Состояние задачи».
+Автономный тест логики автомата (`check_task_state.py`) и интерфейсные
+прогоны («Тест автомата», «Прогон по модели», «Тест ТЗ») **удалены** из
+проекта. Панель «Состояние задачи» в интерфейсе остаётся доступной для ручной
+работы с автоматом (этапы, пауза/продолжение).
 
 Связанные проверки управления контекстом (офлайн):
 
@@ -273,6 +275,5 @@ python check_strategies.py       # стратегии контекста (slidin
 | `rtk_app/task_state.py` | Конечный автомат задачи (логика переходов) |
 | `rtk_app/session_store.py` | Хранение/персистентность состояния задачи |
 | `rtk_app/agent.py` | Встраивание состояния задачи в промпт; LLM-переходы |
-| `web/server.py` | API `/api/task`, `/api/task/selftest`; авто-переход |
+| `web/server.py` | API `/api/task`; авто-переход |
 | `js/app.js`, `index.html` | Панель и кнопки «Состояние задачи» |
-| `check_task_state.py` | Автономный тест логики автомата |

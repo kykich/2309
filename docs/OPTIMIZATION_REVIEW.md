@@ -37,7 +37,7 @@
 keep <= 0 → вернуть как есть» теперь живёт в ОДНОМ месте.
 
 > Проверка после правок: `python -m py_compile` — ок; все автотесты
-> (`check_task_state` 51 OK, `check_context` 14 OK, `check_memory` все OK,
+> (`check_context` 14 OK, `check_memory` все OK,
 > `check_memory_in_request` 11 OK, `check_server_context` 7 OK,
 > `check_strategies` 30 OK, `check_auto_compact` 10 OK) — без провалов.
 
