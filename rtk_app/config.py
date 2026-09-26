@@ -139,30 +139,16 @@ INVARIANT_MAX = 100
 # (отдельный вызов модели «нарушает ли ответ инвариант?», см. agent.check_invariants).
 INVARIANT_CHECK_MODEL = "GigaChat"
 
-# ДЕФОЛТНЫЕ инварианты и тестовое задание для кнопки «Автотест инвариантов»
-# (зашиты в код/UI, см. task2.md, пункт 5).
-INVARIANT_DEFAULT_TEST_GOAL = (
-    "Создание приложения на Qt + С++ для контроля личных расходов с целью "
-    "накопить (контроль необязательных расходов: например, сладости или "
-    "готовые полуфабрикаты, которые можно приготовить самому)."
-)
-INVARIANT_DEFAULT_TEST_SET = [
-    {"category": "stack", "text": "Стек: только Qt и стандартный C++ (без сторонних библиотек)."},
-    {"category": "architecture", "text": "Архитектура: десктопное приложение Qt Widgets, без веб-сервера."},
-    {"category": "tech", "text": "Хранение данных локально (SQLite/JSON), без внешних облачных сервисов."},
-    {"category": "business", "text": "Приложение только советует и учитывает расходы; оно не оформляет кредиты и не даёт финансовых гарантий."},
-]
-
 # --- MCP (Model Context Protocol) ---
 # Возможность использовать инструменты MCP-сервера (list_tools / call_tool).
 # В левой колонке интерфейса есть ЧЕКБОКС включения MCP, КНОПКА проверки
 # СТАТУСА MCP-сервера и ВЫБОР МОДЕЛИ, которая используется при работе с MCP.
 # Сервер поднимается по stdio как подпроцесс. По умолчанию используется
-# демо-сервер проекта (test_server.py); для работы с календарём укажите
-# MCP_SERVER_ARGS = ["yandex_calendar_server.py"]. Команду можно переопределить.
+# MCP-сервер Яндекс.Календаря (yandex_calendar_server.py). Команду можно
+# переопределить через MCP_SERVER_CMD / MCP_SERVER_ARGS.
 MCP_ENABLED = False                 # включён ли MCP (стартовое значение)
 MCP_SERVER_CMD = ""                 # "" — текущий интерпретатор Python
-MCP_SERVER_ARGS = ["test_server.py"]  # аргументы запуска MCP-сервера (по умолч.)
+MCP_SERVER_ARGS = ["yandex_calendar_server.py"]  # аргументы запуска MCP-сервера
 MCP_TIMEOUT = 30                    # таймаут операций MCP (секунд)
 
 # Список доступных MCP-серверов для ВЫБОРА в интерфейсе. Каждый элемент:
@@ -171,13 +157,13 @@ MCP_TIMEOUT = 30                    # таймаут операций MCP (се�
 #   args  — аргументы запуска stdio-подпроцесса (команда — MCP_SERVER_CMD).
 # Активный сервер выбирается в UI и сохраняется в MCP_SETTINGS_FILE ("server").
 MCP_SERVERS = [
-    {"id": "demo", "label": "Демо (add / multiply / echo)",
-     "args": ["test_server.py"]},
     {"id": "calendar", "label": "Яндекс.Календарь (CalDAV)",
      "args": ["yandex_calendar_server.py"]},
+    {"id": "currency", "label": "Конвертер",
+     "args": ["currency_server.py"]},
 ]
 # MCP-сервер по умолчанию (id из MCP_SERVERS).
-MCP_SERVER_DEFAULT = "demo"
+MCP_SERVER_DEFAULT = "calendar"
 # Метка модели, применяемой агентом при работе с MCP. "" — первая доступная.
 MCP_MODEL = ""
 # Файл настроек MCP между запусками (в папке сессии).

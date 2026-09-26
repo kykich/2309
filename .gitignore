@@ -1,6 +1,7 @@
 # --- Секретные файлы (НИКОГДА не загружать на GitHub!) ---
 apidpsk.txt
 ya.txt
+exch.txt
 api_key.txt
 *.key
 .env
