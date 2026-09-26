@@ -473,6 +473,12 @@ def _run_due_reminders():
         lead = int(params.get("lead_minutes", 0) or 0)
         repeat = int(params.get("repeat_minutes", 0) or 0)
         lead_txt = _human_lead(lead)
+        # ВАЖНО: НЕ выдаём напоминание о событии, которое УЖЕ началось.
+        # Если напоминание «залежалось» (планировщик не вызывался, пока шло
+        # событие) — закрываем задание молча, без «напоминания о прошедшем».
+        if _event_has_started(params):
+            _reminders().mark_fired(job["id"], "", "событие уже наступило")
+            continue
         if repeat > 0:
             messages.append("НАПОМИНАНИЕ: «%s» начнётся %s (%s; повтор каждые %s)."
                             % (title, when, lead_txt, _human_dur(repeat)))
@@ -483,6 +489,25 @@ def _run_due_reminders():
         next_run = _next_reminder_time(params, repeat)
         _reminders().mark_fired(job["id"], next_run, "напомнил: %s" % title)
     return messages
+
+
+def _event_has_started(params, at_time=None):
+    """True, если время начала события уже наступило (<= указанного момента).
+
+    Нужно, чтобы НЕ озвучивать напоминание о прошедшем событии (когда
+    планировщик вызывается с опозданием — например, после простоя).
+    Сравнение идёт по строке в формате TIME_FMT — лексикографически это
+    эквивалентно сравнению во времени.
+
+    at_time — момент сравнения (строка TIME_FMT); по умолчанию «сейчас».
+    Если время начала события не разбирается — считаем, что НЕ наступило
+    (лучше показать напоминание, чем потерять его из-за формата).
+    """
+    start = _parse_event_start(params.get("event_start"))
+    if not start:
+        return False
+    ref = at_time or now_str()
+    return time.strftime(TIME_FMT, start) <= ref
 
 
 def _next_reminder_time(params, repeat_minutes):
