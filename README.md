@@ -48,6 +48,8 @@ sk-ваш_ключ_из_deepseek
 ```
 
 > ⚠️ Файл `apidpsk.txt` добавлен в `.gitignore` и не должен попадать на GitHub.
+> Аналогично хранятся ключи MCP-серверов: `ya.txt` (Яндекс.Календарь) и
+> `exch.txt` (ExchangeRate-API) — оба в `.gitignore`.
 
 ## Запуск
 
@@ -105,8 +107,6 @@ python rtk_web.py 9000 0.0.0.0   # доступ с других машин
 получить список доступных инструментов (`list_tools`) и вызвать нужный
 инструмент (`call_tool`).
 
-- **`test_server.py`** — демонстрационный MCP-сервер (stdio-транспорт) с
-  тремя инструментами: `add`, `multiply`, `echo`.
 - **`yandex_calendar_server.py`** — MCP-сервер **Яндекс.Календаря** (CalDAV):
   `list_calendars`, `list_events`, `find_event`, `create_event`,
   `update_event`, `delete_event`. Учётные данные берутся из файла `ya.txt`
@@ -129,9 +129,49 @@ python rtk_web.py 9000 0.0.0.0   # доступ с других машин
   - Поиск по названию без указания дат идёт по широкому окну
     (±`CALENDAR_SEARCH_YEARS` лет, по умолчанию 2) через `cal.search`
     (надёжнее, чем `cal.events()`, который на Яндексе отдаёт не все ресурсы).
+- **`currency_server.py`** — MCP-сервер **«Конвертер»** (курсы валют,
+  ExchangeRate-API): `list_currencies`, `get_rate`, `convert_currency`,
+  `get_rates`. API-ключ берётся из файла `exch.txt` (одна строка — ключ от
+  https://app.exchangerate-api.com; файл в `.gitignore`, внешних зависимостей
+  не требуется — используется стандартная библиотека `urllib`):
+  - `list_currencies()` — список поддерживаемых кодов валют (ISO 4217);
+  - `get_rate(from_currency, to_currency)` — курс между двумя валютами
+    (например, `USD` → `RUB`);
+  - `convert_currency(amount, from_currency, to_currency)` — перевод суммы по
+    текущему курсу;
+  - `get_rates(base_currency, currencies="")` — курсы базовой валюты к набору
+    валют (по умолчанию — ходовые; можно задать список через запятую).
+
+### Работа по расписанию (см. `docs/task4.md`)
+
+MCP-серверы умеют работать **по расписанию** — с сохранением данных в JSON и
+выдачей агрегированного результата. Фонового демона нет: MCP-сервер
+запускается на время вызова, поэтому задания **персистентны** (хранятся в
+`session/mcp_jobs.json`) и исполняются **лениво** (при любом обращении к
+серверу) либо явным вызовом `run_due()` — так «24/7» эмулируется
+персистентностью состояния. Общий механизм заданий — `rtk_app/jobs_store.py`.
+
+- **Календарь — напоминалка до события:**
+  - `schedule_reminder(uid|summary, date, lead_minutes)` — напомнить за
+    `lead_minutes` минут до начала события (по UID ИЛИ по названию/дате);
+  - `list_reminders()`, `cancel_reminder(id)` — список и отмена;
+  - `due_reminders()` / `run_due()` — наступившие напоминания (что озвучить).
+- **Конвертер — сбор курсов по расписанию + агрегат:**
+  - `schedule_rate(from, to, every_minutes, first_now)` — периодически
+    записывать курс пары в JSON;
+  - `run_due()` / `collect_now(from, to)` — исполнить созревшие / сохранить
+    точку вне расписания;
+  - `rate_points(from, to, limit)` — накопленные точки;
+  - `rate_summary(from, to, period)` — **агрегат** (число точек, мин, макс,
+    среднее, первое/последнее, изменение в абс. и %) за период
+    (`day`/`week`/`month`/`all`);
+  - `list_jobs()`, `cancel_job(id)` — список и отмена заданий сбора.
+- **Выдача сводки — через модель по запросу:** инструменты возвращают текст,
+  а модель (агент) пересказывает его пользователю. Данные заданий и точек
+  хранятся в `session/mcp_jobs.json` (файл внутри `session/`, в git не попадает).
 - **Выбор сервера в интерфейсе.** В левой колонке (блок **MCP**) есть
-  выпадающий список «сервер MCP» — переключение между демо-сервером и
-  Яндекс.Календарём без правки кода. Список серверов задаётся в
+  выпадающий список «сервер MCP». Доступны два сервера — **Яндекс.Календарь**
+  (`calendar`) и **Конвертер** (`currency`); список задаётся в
   `rtk_app/config.py` (`MCP_SERVERS`), выбор сохраняется в
   `session/mcp.json`.
 - **`client.py`** — минимальный MCP-клиент: запускает сервер подпроцессом по
@@ -139,7 +179,8 @@ python rtk_web.py 9000 0.0.0.0   # доступ с других машин
   инструментов:
 
   ```bash
-  python client.py
+  python client.py                    # сервер календаря (по умолчанию)
+  python client.py currency_server.py # сервер «Конвертер»
   ```
 
 - **`rtk_app/mcp_client.py`** — синхронная обёртка над MCP SDK
@@ -163,9 +204,10 @@ python rtk_web.py 9000 0.0.0.0   # доступ с других машин
 ├── css/                 # стили
 ├── js/                  # клиентская логика чата
 ├── client.py            # минимальный MCP-клиент (stdio): list_tools
-├── test_server.py       # демо MCP-сервер (stdio): add/multiply/echo
 ├── yandex_calendar_server.py  # MCP-сервер Яндекс.Календаря (CalDAV)
+├── currency_server.py   # MCP-сервер «Конвертер» (курсы валют)
 ├── ya.txt               # учётные данные календаря (в .gitignore)
+├── exch.txt             # API-ключ ExchangeRate-API (в .gitignore)
 ├── rtk_web.py           # веб-точка входа
 ├── rtk_app/             # серверная логика
 │   ├── agent.py         # АГЕНТ: отдельная сущность, вся логика запросов к LLM
@@ -177,6 +219,7 @@ python rtk_web.py 9000 0.0.0.0   # доступ с других машин
 │   ├── html_report.py   # рендер Markdown/LaTeX-ответа в HTML
 │   ├── session_store.py # история, память, ветки, факты, стратегии, задачи
 │   ├── mcp_client.py    # MCP-клиент: list_tools / call_tool / status
+│   ├── jobs_store.py    # задания расписания MCP-серверов (JSON, агрегация)
 │   └── task_state.py    # конечный автомат задачи (переходы состояний)
 ├── web/
 │   └── server.py        # ThreadingHTTPServer + JSON-API (делегирует агенту)
@@ -197,13 +240,13 @@ python rtk_web.py 9000 0.0.0.0   # доступ с других машин
 Автономные проверки (сеть/LLM не требуются) — запускаются из корня проекта:
 
 ```bash
-python tests/check_task_state.py       # автомат задачи
 python tests/check_context.py          # сжатие контекста
 python tests/check_memory.py           # модель памяти
 python tests/check_memory_in_request.py# память в запросе к модели
 python tests/check_server_context.py   # контекст на стороне сервера
 python tests/check_strategies.py       # стратегии (sliding/facts/branch)
 python tests/check_auto_compact.py     # авто-сжатие через HTTP
+python tests/check_jobs.py             # задания расписания MCP (JSON, агрегат)
 ```
 
 Каждый тест печатает `[OK]`/`[FAIL]` по проверкам и строку

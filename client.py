@@ -1,10 +1,15 @@
 """Минимальный MCP-клиент (stdio).
 
 Шаги:
-  1. Запускаем MCP-сервер (test_server.py) как подпроцесс по stdio.
+  1. Запускаем MCP-сервер как подпроцесс по stdio.
   2. Устанавливаем MCP-соединение и инициализируем сессию.
   3. Запрашиваем список инструментов через list_tools().
   4. Выводим список на экран.
+
+По умолчанию запускается сервер Яндекс.Календаря. Можно указать другой
+MCP-сервер проекта первым аргументом командной строки:
+    python client.py                       # yandex_calendar_server.py
+    python client.py currency_server.py    # MCP-сервер «Конвертер»
 """
 
 import asyncio
@@ -20,10 +25,15 @@ except Exception:
     pass
 
 
+# Какой MCP-сервер проекта смотреть: из аргумента CLI или по умолчанию —
+# Яндекс.Календарь.
+SERVER_FILE = sys.argv[1] if len(sys.argv) > 1 else "yandex_calendar_server.py"
+
+
 # Описание того, как запустить наш MCP-сервер.
 SERVER_PARAMS = StdioServerParameters(
     command=sys.executable,          # текущий интерпретатор Python
-    args=["test_server.py"],         # наш тестовый сервер
+    args=[SERVER_FILE],              # файл MCP-сервера проекта
 )
 
 
