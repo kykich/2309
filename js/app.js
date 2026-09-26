@@ -80,7 +80,16 @@
         streamEl.innerHTML = "";
 
         items.forEach(function (item) {
-            if (item.role === "assistant") {
+            if (item.role === "reminder") {
+                // Напоминание — отдельное сообщение на КРАСНОМ фоне.
+                var rMsg = document.createElement("div");
+                rMsg.className = "msg reminder";
+                var rb = document.createElement("div");
+                rb.className = "bubble";
+                rb.textContent = item.content;
+                rMsg.appendChild(rb);
+                streamEl.appendChild(rMsg);
+            } else if (item.role === "assistant") {
                 var msg = document.createElement("div");
                 msg.className = "msg a";
                 var b = document.createElement("div");
@@ -1556,7 +1565,15 @@
         })
         .then(function (data) {
             setStatus("", "");
+            // Доставленные напоминания показываем ПЕРВЫМИ (красным фоном),
+            // даже если ответ модели не удался — напоминание важнее.
+            if (Array.isArray(data.reminders) && data.reminders.length) {
+                data.reminders.forEach(function (txt) {
+                    items.push({ role: "reminder", content: txt });
+                });
+            }
             if (!data.ok) {
+                render();
                 setStatus(data.error || "Произошла ошибка.", "error");
                 return;
             }

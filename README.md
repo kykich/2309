@@ -251,6 +251,7 @@ python tests/check_strategies.py       # стратегии (sliding/facts/branc
 python tests/check_auto_compact.py     # авто-сжатие через HTTP
 python tests/check_jobs.py             # задания расписания MCP (JSON, агрегат)
 python tests/check_reminders.py        # повторяющиеся напоминания календаря
+python tests/check_reminder_repeat.py  # напоминание с повтором каждую минуту (сквозной)
 ```
 
 Каждый тест печатает `[OK]`/`[FAIL]` по проверкам и строку

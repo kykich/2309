@@ -288,6 +288,21 @@ body { font-family: 'Segoe UI', Arial, sans-serif; color: var(--text); overflow:
 /* вопрос пользователя — справа, синим */
 .msg.q { margin-left: auto; max-width: 90%; }
 .msg.q .bubble { background: var(--own-bg); border-top-right-radius: 3px; color: #1e2650; }
+/* НАПОМИНАНИЕ календаря — слева, на КРАСНОМ фоне (привлекает внимание).
+   Доставляется автоматически при любом запросе пользователя. */
+.msg.reminder { width: 100%; max-width: 100%; }
+.msg.reminder .bubble {
+    background: #d93025;
+    color: #fff;
+    border: 1px solid #b3261e;
+    border-top-left-radius: 3px;
+    font-weight: 700;
+    box-shadow: 0 2px 8px rgba(179, 38, 30, 0.25);
+}
+.msg.reminder .bubble::before {
+    content: "🔔 ";
+    margin-right: 2px;
+}
 /* ответ модели — слева, занимает всю ширину */
 .msg.a { width: 100%; max-width: 100%; }
 .msg.a .bubble {
