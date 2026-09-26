@@ -9,23 +9,36 @@
   * update_event   — изменить событие (по UID ИЛИ по названию/дате);
   * delete_event   — удалить событие (по UID ИЛИ по названию/дате).
 
+ДОПОЛНИТЕЛЬНО (см. docs/task4.md) — РАБОТА ПО РАСПИСАНИЮ как НАПОМИНАЛКА
+до события (напомнить за N минут/часов/дней до начала события):
+  * schedule_reminder  — поставить напоминание к событию (по UID ИЛИ словами);
+  * list_reminders      — список напоминаний;
+  * cancel_reminder     — отменить напоминание по id;
+  * due_reminders        — наступившие напоминания (что озвучить сейчас);
+  * run_due              — исполнить/собрать наступившие (ленивый и явный).
+
 Учётные данные берутся из файла ya.txt (первая строка — логин/email,
 вторая — пароль приложения с доступом к календарю). Файл НЕ коммитится.
 
 Запуск (как stdio-подпроцесс MCP):
     python yandex_calendar_server.py
 
-Переключение проекта на этот сервер — в rtk_app/config.py:
-    MCP_SERVER_ARGS = ["yandex_calendar_server.py"]
+Переключение проекта на этот сервер — в rtk_app/config.py (MCP_SERVERS).
 """
 
 import datetime as _dt
 import os
+import sys
 
 from mcp.server.mcpserver import MCPServer
 
 # BASE_DIR — папка проекта (рядом с config.py); учитываем и запуск из др. CWD.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Хранилище заданий расписания — общий модуль проекта (rtk_app/jobs_store.py).
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+from rtk_app.jobs_store import JobsStore, now_str
 
 mcp = MCPServer("yandex-calendar")
 
@@ -411,6 +424,91 @@ def _pick_target(cal, uid="", summary="", start="", end="", location=""):
 
 
 # --------------------------------------------------------------------------
+# Напоминания по расписанию (до события)
+# --------------------------------------------------------------------------
+_REMINDERS = JobsStore(server="calendar")
+
+
+def _reminders():
+    """Хранилище напоминаний этого сервера (пространство "calendar")."""
+    return _REMINDERS
+
+
+def _event_start_dt(cal, uid="", summary="", date=""):
+    """Возвращает (start_datetime, event_summary) целевого события.
+
+    Ищет по uid ИЛИ словами (summary/date). Возбуждает RuntimeError, если
+    событие не найдено/неоднозначно или у него нет времени начала.
+    """
+    ok, payload = _pick_target(cal, uid=uid, summary=summary,
+                               start=date, end=date)
+    if not ok:
+        raise RuntimeError(payload)
+    _ev, comp, ev_start, _rid = payload
+    if ev_start is None:
+        raise RuntimeError("у события не определено время начала")
+    return ev_start, str(comp.get("summary") or "")
+
+
+def _run_due_reminders():
+    """Собирает НАСТУПИВШИЕ напоминания. Возвращает список текстов-напоминаний.
+
+    Лениво вызывается из других инструментов и явно из run_due(). Для
+    разового напоминания после срабатывания помечаем задание done; ошибки
+    (событие удалено и т.п.) также помечаем исполненными, чтобы не залипали.
+    """
+    messages = []
+    for job in _reminders().due_jobs():
+        if job.get("kind") != "reminder":
+            continue
+        params = job.get("params") or {}
+        title = params.get("event_summary") or params.get("summary") or "событие"
+        when = params.get("event_start") or ""
+        lead = int(params.get("lead_minutes", 0) or 0)
+        lead_txt = _human_lead(lead)
+        messages.append("НАПОМИНАНИЕ: «%s» начнётся %s (%s)."
+                        % (title, when, lead_txt))
+        _reminders().mark_run(job["id"], "напомнил: %s" % title)
+    return messages
+
+
+def _human_lead(minutes):
+    """Человекочитаемая длительность опережения: 90 -> 'через 1 ч 30 мин'."""
+    try:
+        m = int(minutes)
+    except (TypeError, ValueError):
+        return ""
+    if m <= 0:
+        return "до начала"
+    days, rem = divmod(m, 1440)
+    hours, mins = divmod(rem, 60)
+    parts = []
+    if days:
+        parts.append("%d д" % days)
+    if hours:
+        parts.append("%d ч" % hours)
+    if mins:
+        parts.append("%d мин" % mins)
+    return "за " + " ".join(parts) + " до начала"
+
+
+def _fmt_reminders(jobs):
+    """Читаемое представление списка напоминаний."""
+    if not jobs:
+        return "Напоминаний нет."
+    lines = []
+    for j in jobs:
+        p = j.get("params") or {}
+        status = "выполнено" if j.get("done") else \
+            ("сработает: %s" % j.get("next_run", ""))
+        lines.append("  %s — «%s» %s, %s"
+                     % (j.get("id"), p.get("event_summary", "?"),
+                        _human_lead(p.get("lead_minutes", 0)), status))
+    return "\n".join(lines)
+
+
+
+# --------------------------------------------------------------------------
 # Инструменты MCP
 # --------------------------------------------------------------------------
 @mcp.tool()
@@ -442,6 +540,8 @@ def list_events(start: str, end: str) -> str:
     start="<текущий год>-01-01", end="<текущий год>-01-31".
     Если start и end — один и тот же день, вернутся только события этого дня.
     """
+    # ЛЕНИВЫЙ ПРОГОН напоминаний: при обращении к календарю собираем наступившие.
+    _run_due_reminders()
     try:
         s = _parse_dt(start)
         e = _parse_dt(end)
@@ -632,6 +732,92 @@ def delete_event(uid: str = "", summary: str = "", date: str = "",
     when = ev_start.strftime("%Y-%m-%d %H:%M") if ev_start else ""
     return "Событие «%s»%s удалено." % (
         comp.get("summary") or "", (" (%s)" % when) if when else "")
+
+
+# --------------------------------------------------------------------------
+# Инструменты напоминаний (расписание «до события»)
+# --------------------------------------------------------------------------
+@mcp.tool()
+def schedule_reminder(uid: str = "", summary: str = "", date: str = "",
+                      lead_minutes: int = 30) -> str:
+    """Поставить НАПОМИНАНИЕ к событию — напомнить за N минут до начала.
+
+    Событие ищется ЛИБО по uid, ЛИБО «словами»:
+      * summary — часть названия (например, «встреча»);
+      * date    — дата события ("YYYY-MM-DD") — если нужно уточнить.
+    lead_minutes — за сколько МИНУТ до начала напомнить (например, 30, 120,
+                   1440 — за сутки).
+
+    Момент напоминания = начало события − lead_minutes. Когда он наступает,
+    напоминание попадает в due_reminders()/run_due() (и в ленивый прогон при
+    обращении к календарю) — агент озвучивает его. Если момент уже прошёл,
+    напоминание считается наступившим сразу.
+    """
+    try:
+        with _client() as client:
+            cal = _main_calendar(client)
+            start_dt, title = _event_start_dt(cal, uid=uid, summary=summary,
+                                              date=date)
+    except Exception as exc:
+        return "Не удалось поставить напоминание: %s" % exc
+    try:
+        lead = max(0, int(lead_minutes or 0))
+    except (TypeError, ValueError):
+        lead = 30
+    # Момент напоминания = начало события − lead. Приводим к строке TIME_FMT.
+    remind_at = start_dt - _dt.timedelta(minutes=lead)
+    # напоминание разовое: at=момент напоминания (в прошлом → сработает сразу).
+    job = _reminders().add_job(
+        "reminder",
+        {"event_summary": title, "event_start": start_dt.strftime("%Y-%m-%d %H:%M"),
+         "lead_minutes": lead, "uid": uid or ""},
+        every_minutes=0,
+        at=remind_at.strftime("%Y-%m-%d %H:%M:%S"),
+    )
+    return ("Напоминание %s создано: «%s» %s (событие: %s)."
+            % (job["id"], title, _human_lead(lead),
+               start_dt.strftime("%Y-%m-%d %H:%M")))
+
+
+@mcp.tool()
+def list_reminders() -> str:
+    """Список напоминаний (к каким событиям и за сколько)."""
+    return "Напоминания (Календарь):\n" + _fmt_reminders(_reminders().list_jobs())
+
+
+@mcp.tool()
+def cancel_reminder(reminder_id: str) -> str:
+    """Отменить напоминание по его id."""
+    if _reminders().delete_job(str(reminder_id or "").strip()):
+        return "Напоминание %s отменено." % reminder_id
+    return "Напоминание %s не найдено." % reminder_id
+
+
+@mcp.tool()
+def due_reminders() -> str:
+    """НАСТУПИВШИЕ напоминания — что нужно озвучить сейчас.
+
+    Возвращает список напоминаний, срок которых уже наступил (и которые ещё
+    не выданы). Вызовите это, когда хотите показать пользователю актуальные
+    напоминания; после выдачи разовое напоминание помечается исполненным.
+    """
+    msgs = _run_due_reminders()
+    if not msgs:
+        return "Наступивших напоминаний нет."
+    return "\n".join(msgs)
+
+
+@mcp.tool()
+def run_due() -> str:
+    """Собрать все НАСТУПИВШИЕ напоминания (тик планировщика).
+
+    То же, что due_reminders(), но под «тик»: удобно периодически вызывать,
+    чтобы забирать сработавшие напоминания (заменяет отсутствующий демон).
+    """
+    msgs = _run_due_reminders()
+    if not msgs:
+        return "Наступивших напоминаний нет."
+    return "Напоминаний: %d\n%s" % (len(msgs), "\n".join(msgs))
 
 
 if __name__ == "__main__":
